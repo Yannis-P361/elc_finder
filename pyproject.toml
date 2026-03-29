@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "electrode-coverage"
+version = "0.2.0"
+description = "Screen intracranial electrodes against any MNI-space brain atlas ROI using OpenNeuro iEEG data."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "ForniX Team"},
+]
+keywords = ["ieeg", "seeg", "ecog", "electrodes", "brain", "atlas", "mni", "openneuro", "bids"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = [
+    "nibabel>=4.0",
+    "nilearn>=0.10",
+    "numpy>=1.24",
+    "pandas>=1.5",
+    "scipy>=1.10",
+    "plotly>=5.0",
+    "scikit-image>=0.20",
+]
+
+[project.optional-dependencies]
+excel = ["openpyxl>=3.0"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0"]
+
+[project.scripts]
+electrode-coverage = "electrode_coverage.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/your-org/electrode-coverage"
+
+[tool.setuptools.packages.find]
+include = ["electrode_coverage*"]

@@ -26,6 +26,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "certifi",
     "nibabel>=4.0",
     "nilearn>=0.10",
     "numpy>=1.24",

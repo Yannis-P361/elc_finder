@@ -5,12 +5,46 @@ from __future__ import annotations
 import json
 import logging
 import os
+import ssl
 import time
 import urllib.request
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _make_ssl_context() -> ssl.SSLContext:
+    """Create an SSL context, using certifi CA bundle as fallback.
+
+    On macOS with python.org Python, the default certificate store is
+    often empty.  This function tries certifi first, then falls back to
+    the system default.
+    """
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+def _urlopen(req, **kwargs):
+    """urllib.request.urlopen wrapper with SSL fallback."""
+    try:
+        return urllib.request.urlopen(req, **kwargs)
+    except urllib.error.URLError as exc:
+        if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+            ctx = _make_ssl_context()
+            try:
+                return urllib.request.urlopen(req, context=ctx, **kwargs)
+            except urllib.error.URLError:
+                raise RuntimeError(
+                    "SSL certificate verification failed. Fix with one of:\n"
+                    "  pip install certifi\n"
+                    "  # or on macOS:\n"
+                    "  /Applications/Python\\ 3.13/Install\\ Certificates.command"
+                ) from exc
+        raise
 
 _OPENNEURO_GRAPHQL_URL = "https://openneuro.org/crn/graphql"
 
@@ -35,7 +69,7 @@ def discover_ieeg_datasets(timeout: int = 30) -> list[str]:
         headers={"Content-Type": "application/json", "User-Agent": "electrode-coverage-pipeline"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _urlopen(req, timeout=timeout) as resp:
             result = json.loads(resp.read().decode())
     except Exception as exc:
         logger.warning(
@@ -155,10 +189,15 @@ def download_electrode_metadata(
     meta = _read_download_meta(meta_path)
 
     if not refresh and _cache_is_fresh(meta, cache_ttl):
-        logger.info("Using cached dataset: %s", dataset_dir)
+        age_days = (time.time() - meta.get("downloaded_at", 0)) / 86400
+        logger.info(
+            "Using cached dataset %s (%.1f days old, TTL=%d days).",
+            dataset_id, age_days, cache_ttl // 86400,
+        )
         return dataset_dir
 
-    logger.info("Fetching file tree for %s from GitHub...", dataset_id)
+    reason = "forced refresh" if refresh else "cache stale or missing"
+    logger.info("Fetching %s from GitHub (%s)...", dataset_id, reason)
     tree_url = _GITHUB_API_TREE_URL.format(dataset_id=dataset_id)
     req = urllib.request.Request(tree_url)
     req.add_header("Accept", "application/vnd.github.v3+json")
@@ -167,7 +206,7 @@ def download_electrode_metadata(
     if token:
         req.add_header("Authorization", f"token {token}")
     try:
-        with urllib.request.urlopen(req) as resp:
+        with _urlopen(req) as resp:
             tree_data = json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
@@ -198,9 +237,10 @@ def download_electrode_metadata(
         raw_url = _GITHUB_RAW_URL.format(dataset_id=dataset_id, filepath=filepath)
         logger.debug("Downloading %s", filepath)
         try:
-            urllib.request.urlretrieve(raw_url, local_path)
+            with _urlopen(raw_url) as resp:
+                local_path.write_bytes(resp.read())
             downloaded += 1
-        except urllib.error.HTTPError as exc:
+        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
             logger.warning("Failed to download %s: %s", filepath, exc)
 
     _write_download_meta(meta_path, {

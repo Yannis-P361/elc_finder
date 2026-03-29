@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import ssl
 import urllib.request
 from pathlib import Path
 from typing import Optional
@@ -11,6 +12,34 @@ from typing import Optional
 import nibabel as nib
 
 logger = logging.getLogger(__name__)
+
+
+def _make_ssl_context() -> ssl.SSLContext:
+    """Create an SSL context, using certifi CA bundle as fallback."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+def _urlopen(url, **kwargs):
+    """urllib.request.urlopen wrapper with SSL fallback."""
+    try:
+        return urllib.request.urlopen(url, **kwargs)
+    except urllib.error.URLError as exc:
+        if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+            ctx = _make_ssl_context()
+            try:
+                return urllib.request.urlopen(url, context=ctx, **kwargs)
+            except urllib.error.URLError:
+                raise RuntimeError(
+                    "SSL certificate verification failed. Fix with one of:\n"
+                    "  pip install certifi\n"
+                    "  # or on macOS:\n"
+                    "  /Applications/Python\\ 3.13/Install\\ Certificates.command"
+                ) from exc
+        raise
 
 _NEUROVAULT_URL_TEMPLATE = "https://neurovault.org/media/images/{collection}/{{filename}}"
 _FSL_STANDARD_RAW = "https://git.fmrib.ox.ac.uk/fsl/data_standard/-/raw/master/{filename}"
@@ -124,10 +153,11 @@ def fetch_from_fsl(template_name: str, cache_dir: Path) -> nib.Nifti1Image:
     for url in urls:
         logger.info("Trying FSL download: %s", url)
         try:
-            urllib.request.urlretrieve(url, cached)
+            with _urlopen(url) as resp:
+                cached.write_bytes(resp.read())
             logger.info("Downloaded FSL template %s from %s", template_name, url)
             return nib.load(str(cached))
-        except urllib.error.HTTPError:
+        except (urllib.error.HTTPError, urllib.error.URLError):
             continue
 
     raise RuntimeError(
@@ -149,7 +179,7 @@ def list_fsl_atlases() -> list[str]:
     # data_standard — top-level .nii.gz files
     try:
         url = _FSL_GITLAB_API.format(project="fsl%2Fdata_standard") + "?per_page=100"
-        with urllib.request.urlopen(url) as resp:
+        with _urlopen(url) as resp:
             entries = json.loads(resp.read().decode())
         for e in entries:
             if e["name"].endswith(".nii.gz"):
@@ -164,7 +194,7 @@ def list_fsl_atlases() -> list[str]:
                 _FSL_GITLAB_API.format(project="fsl%2Fdata_atlases")
                 + f"?path={subdir}&per_page=100"
             )
-            with urllib.request.urlopen(url) as resp:
+            with _urlopen(url) as resp:
                 entries = json.loads(resp.read().decode())
             for e in entries:
                 if e["name"].endswith(".nii.gz"):
@@ -185,7 +215,8 @@ def _download_and_cache(url: str, cache_dir: Path) -> nib.Nifti1Image:
         return nib.load(str(cached))
     logger.info("Downloading %s...", url)
     try:
-        urllib.request.urlretrieve(url, cached)
+        with _urlopen(url) as resp:
+            cached.write_bytes(resp.read())
     except Exception as exc:
         raise RuntimeError(f"Download failed ({url}): {exc}") from exc
     return nib.load(str(cached))

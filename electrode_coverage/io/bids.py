@@ -36,6 +36,35 @@ def parse_bids_entities(filename: str) -> dict[str, Optional[str]]:
     return entities
 
 
+def _find_matching_channels(
+    electrodes_tsv: Path, entities: dict[str, Optional[str]]
+) -> Optional[Path]:
+    """Find a channels.tsv in the same directory that matches the electrode file.
+
+    BIDS electrodes.tsv is session-level (no task/run), while channels.tsv is
+    run-level.  We match on sub, ses, and acq — the first matching file is
+    returned (they share the same channel list across runs).
+    """
+    # Try exact name swap first (works when entities match exactly).
+    exact = electrodes_tsv.parent / electrodes_tsv.name.replace(
+        "_electrodes.tsv", "_channels.tsv"
+    )
+    if exact.exists():
+        return exact
+
+    # Search for any channels.tsv sharing sub, ses, acq.
+    sub = entities.get("sub")
+    ses = entities.get("ses")
+    acq = entities.get("acq")
+    for ch_path in sorted(electrodes_tsv.parent.glob("*_channels.tsv")):
+        ch_entities = parse_bids_entities(ch_path.name)
+        if (ch_entities.get("sub") == sub
+                and ch_entities.get("ses") == ses
+                and ch_entities.get("acq") == acq):
+            return ch_path
+    return None
+
+
 def find_electrode_files(bids_root: Path) -> list[ElectrodeFileEntry]:
     """Discover all iEEG ``*_electrodes.tsv`` files in a BIDS dataset."""
     patterns = [
@@ -64,10 +93,11 @@ def find_electrode_files(bids_root: Path) -> list[ElectrodeFileEntry]:
         else:
             logger.warning("No coordsystem.json found for %s", tsv_path)
 
-        # Look for matching channels.tsv (same entities, _channels.tsv suffix)
-        ch_name = tsv_path.name.replace("_electrodes.tsv", "_channels.tsv")
-        ch_path = tsv_path.parent / ch_name
-        channels_tsv = ch_path if ch_path.exists() else None
+        # Look for matching channels.tsv.
+        # In BIDS, electrodes.tsv is session-level while channels.tsv is
+        # run-level, so an exact name swap often fails.  We search the same
+        # directory for any channels.tsv that shares sub, ses, and acq.
+        channels_tsv = _find_matching_channels(tsv_path, entities)
 
         key = (entities.get("sub"), entities.get("ses"), entities.get("space"))
         is_derivative = "derivatives" in tsv_path.relative_to(bids_root).parts

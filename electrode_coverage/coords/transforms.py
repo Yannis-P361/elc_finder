@@ -25,29 +25,58 @@ LANCASTER_TAL2MNI = np.array([
 ])
 
 
-def flag_suspicious_units(coords: np.ndarray) -> bool:
-    """Check whether coordinates have suspicious units.
+def flag_suspicious_units(coords: np.ndarray) -> tuple[np.ndarray, bool]:
+    """Check whether coordinates have suspicious units, auto-correcting if possible.
 
-    Returns True if coordinates appear to be in meters (max < 1.0 mm) or
-    unrealistically large (max > 300 mm) for MNI space. Does NOT modify
-    the coordinates — just flags them.
+    Returns ``(coords, suspicious)`` where coords may be converted from
+    meters to mm if all absolute values are < 1.0.
     """
     abs_max = np.abs(coords).max()
     if abs_max < 1.0:
         logger.warning(
-            "Coordinates may be in meters rather than mm (max abs value=%.4f). "
-            "Flagging as suspicious — no automatic conversion applied.",
+            "Coordinates appear to be in meters (max abs=%.4f). "
+            "Auto-converting to mm (*1000).",
             abs_max,
         )
-        return True
+        return coords * 1000, True
     if abs_max > 300.0:
         logger.warning(
             "Coordinates appear unrealistically large for MNI space "
-            "(max abs value=%.1f mm). Flagging as suspicious.",
+            "(max abs=%.1f mm). Flagging as suspicious.",
             abs_max,
         )
-        return True
-    return False
+        return coords, True
+    return coords, False
+
+
+def _detect_mislabeled_surface(
+    coords: np.ndarray, coordinate_system: str, space: CoordinateSpace,
+) -> CoordinateSpace:
+    """Detect volumetric coordinates mislabeled as surface space.
+
+    Real fsaverage surface coordinates are integer vertex indices (0–160k).
+    If coordinates are labeled as surface but contain float values in the
+    typical MNI volumetric range, they are likely mislabeled MNI coordinates.
+    """
+    if space != CoordinateSpace.SURFACE:
+        return space
+
+    abs_max = np.abs(coords).max()
+    # After potential m->mm conversion, MNI coords are in ~1-100 range.
+    # fsaverage vertex indices are integers in the 0-160k range.
+    has_decimals = not np.allclose(coords, np.round(coords), atol=0.01)
+    in_mni_range = 1.0 < abs_max < 200.0
+
+    if has_decimals and in_mni_range:
+        logger.warning(
+            "Coordinates labeled '%s' (surface) appear to be volumetric MNI "
+            "coordinates (float values in %.1f–%.1f range). "
+            "Reclassifying as MNI152 for screening.",
+            coordinate_system, coords.min(), coords.max(),
+        )
+        return CoordinateSpace.MNI152
+
+    return space
 
 
 def transform_to_mni(
@@ -69,12 +98,15 @@ def transform_to_mni(
     """
     space = classify_space(coordinate_system)
 
+    # Detect mislabeled surface coordinates (e.g. fsaverage label on MNI data).
+    space = _detect_mislabeled_surface(coords, coordinate_system, space)
+
     if space == CoordinateSpace.MNI152:
-        suspicious = flag_suspicious_units(coords)
+        coords, suspicious = flag_suspicious_units(coords)
         return coords, "mni_native", suspicious
 
     if space == CoordinateSpace.ACPC:
-        suspicious = flag_suspicious_units(coords)
+        coords, suspicious = flag_suspicious_units(coords)
         logger.warning(
             "ACPC coordinates treated as approximate MNI. No subject-specific "
             "registration available. Results for ACPC datasets should be "
@@ -83,9 +115,10 @@ def transform_to_mni(
         return coords, "acpc_approximate", suspicious
 
     if space == CoordinateSpace.TALAIRACH:
+        coords, suspicious = flag_suspicious_units(coords)
         logger.info("Transforming Talairach -> MNI via Lancaster et al. 2007.")
         mni_coords = apply_affine(LANCASTER_TAL2MNI, coords)
-        return mni_coords, "mni_from_talairach", False
+        return mni_coords, "mni_from_talairach", suspicious
 
     if space == CoordinateSpace.SURFACE:
         logger.info(

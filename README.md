@@ -11,8 +11,8 @@ Screen intracranial electrodes (iEEG/SEEG/ECoG) against any MNI-space brain atla
 ### Option A: pip install (recommended)
 
 ```bash
-git clone <repo-url>
-cd unified_pipeline
+git clone https://github.com/Yannis-P361/elc_finder.git
+cd elc_finder
 pip install .
 ```
 
@@ -25,8 +25,8 @@ electrode-coverage --help
 ### Option B: conda
 
 ```bash
-git clone <repo-url>
-cd unified_pipeline
+git clone https://github.com/Yannis-P361/elc_finder.git
+cd elc_finder
 conda env create -f environment.yml
 conda activate electrode-coverage
 ```
@@ -34,8 +34,8 @@ conda activate electrode-coverage
 ### Option C: manual
 
 ```bash
-git clone <repo-url>
-cd unified_pipeline
+git clone https://github.com/Yannis-P361/elc_finder.git
+cd elc_finder
 pip install -r requirements.txt
 python -m electrode_coverage --help
 ```
@@ -52,9 +52,17 @@ You need an MNI-space NIfTI file (`.nii` or `.nii.gz`). This can be:
 - A probabilistic map (continuous values)
 
 Common sources:
-- [Harvard-Oxford atlas](https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/Atlases) (via FSL or nilearn)
-- [JHU white matter atlas](https://neurovault.org/collections/264/)
-- Any custom mask you've created in MNI space
+- **FSL atlases** (downloaded automatically, no FSL install needed):
+  ```bash
+  electrode-coverage --roi-atlas "fsl:HarvardOxford-sub-maxprob-thr0-1mm" ...
+  ```
+  List all available FSL atlases:
+  ```bash
+  electrode-coverage --list-fsl-atlases
+  ```
+- **NeuroVault**: `--roi-atlas "neurovault:1401"` (JHU white matter atlas)
+- **Direct URL**: `--roi-atlas "https://example.com/atlas.nii.gz"`
+- Any custom NIfTI mask you've created in MNI space
 
 **Verify your atlas** before running the full pipeline:
 
@@ -203,6 +211,13 @@ electrode-coverage --roi-mask your_atlas.nii.gz \
 - **Surface** (surface_space): FreeSurfer surface coordinates (vertex indices). Cannot be screened against volumetric masks. Skipped.
 - **Native** (native_space): Scanner-specific coordinates. Require subject-specific registration not available in public metadata. Skipped.
 
+### Automatic Corrections
+
+The pipeline detects and handles common data quality issues:
+
+- **Mislabeled coordinate systems**: Some datasets (e.g., ds004100) label their coordinates as `fsaverage` (surface) when they are actually volumetric MNI coordinates. The pipeline detects this by checking whether the values are floats in the typical MNI range (rather than integer vertex indices) and automatically reclassifies them with a warning.
+- **Unit mismatch (meters vs mm)**: When coordinate values are all < 1.0, the pipeline assumes they are in meters and auto-converts to mm (multiplied by 1000) with a warning.
+
 ---
 
 ## GitHub API Rate Limits
@@ -288,6 +303,7 @@ pytest tests/ -v
 
 | Package | Version | Purpose |
 |---------|---------|---------|
+| certifi | any | SSL certificate bundle (fixes macOS Python SSL errors) |
 | nibabel | >=4.0 | NIfTI file I/O, affine transforms |
 | nilearn | >=0.10 | Brain surface meshes, atlas fetching |
 | numpy | >=1.24 | Array operations |
